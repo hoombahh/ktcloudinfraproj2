@@ -47,3 +47,16 @@ resource "openstack_compute_instance_v2" "active_web" {
     data.openstack_networking_subnet_v2.inner_subnet
   ]
 }
+
+# 7. 공인 IP 생성 (인스턴스 개수만큼)
+resource "openstack_networking_floatingip_v2" "fip" {
+  count = 2
+  pool  = "sharednet1" # 혹은 var.external_network_id와 매핑되는 이름
+}
+
+# 8. 인스턴스와 공인 IP 연결
+resource "openstack_compute_floatingip_associate_v2" "fip_associate" {
+  count       = 2
+  floating_ip = openstack_networking_floatingip_v2.fip[count.index].address
+  instance_id = openstack_compute_instance_v2.active_web[count.index].id
+}
