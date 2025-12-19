@@ -1,0 +1,10 @@
+# 테라폼 관련 무시
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# 비밀번호 파일 무시 (중요!)
+clouds.yaml
+admin.conf
+kubeconfig
