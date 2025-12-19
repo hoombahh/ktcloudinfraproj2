@@ -2,9 +2,8 @@ pipeline {
     agent any
 
     environment {
-        // [중요] 모든 인증 정보는 clouds.yaml을 따릅니다.
-        // 파일 안에 'openstack'이라는 이름으로 설정되어 있으므로 아래 변수를 설정합니다.
-        OS_CLOUD = "openstack" 
+     
+        OS_CLOUD = "openstack"
     }
 
     stages {
@@ -17,8 +16,8 @@ pipeline {
         stage('2. 인증 파일 준비') {
             steps {
                 script {
-                    // 젠킨스 서버에 있는 clouds.yaml을 테라폼 폴더로 복사
-                    // 이 파일 안에 IP, ID, Password가 다 들어있음
+                    // 젠킨스 서버에 있는 clouds.yaml 테라폼 폴더로 복사
+                    // 이 파일 안에 IP, ID, Password... etc
                     sh 'cp /var/lib/jenkins/clouds.yaml ./openstack/clouds.yaml'
                     sh 'ls -l ./openstack/clouds.yaml'
                 }
@@ -70,54 +69,96 @@ pipeline {
             steps {
                 script {
                     try {
-                        def MASTER_IP = readFile('master_ip.txt').trim()
-                        
+                        def MASTER_IP
+                        dir('openstack') {
+                            MASTER_IP = sh(returnStdout: true, script: 'terraform output -raw master_ip').trim()
+                        }
+                        echo "Master IP: ${MASTER_IP}"
+
                         sshagent(credentials: ['ssh_key_openstack']) {
                             // 1. 파일 전송
                             sh "scp -o StrictHostKeyChecking=no scripts/install_k8s.sh ubuntu@${MASTER_IP}:/home/ubuntu/"
                             sh "scp -o StrictHostKeyChecking=no cicd/mariadb-deploy.yml ubuntu@${MASTER_IP}:/home/ubuntu/"
                             sh "scp -o StrictHostKeyChecking=no cicd/app-deploy.yml ubuntu@${MASTER_IP}:/home/ubuntu/"
 
-                            // 2. K8s 설치
-                            echo "Kubernetes 설치 중..."
+                            // 2. K8s 패키지 설치
+                            echo "Kubernetes 패키지 설치 중..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'chmod +x /home/ubuntu/install_k8s.sh'"
                             sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'bash /home/ubuntu/install_k8s.sh'"
-                            
-                            // 3. 폴더 생성 (sudo 필요)
+
+                            // 3. Containerd 설정 수정
+                            echo "Containerd 설정 수정 중..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo mkdir -p /etc/containerd && containerd config default | sudo tee /etc/containerd/config.toml'"
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo sed -i \"s/SystemdCgroup = false/SystemdCgroup = true/g\" /etc/containerd/config.toml'"
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo systemctl restart containerd'"
+
+                            // 4. K8s 클러스터 초기화 (init)
+                            echo "Kubernetes Master 초기화 중..."
+                            // 이미 초기화 되어 있을 경우를 대비해 reset 먼저 수행 후 init
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo kubeadm reset -f || true'"
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=All'"
+
+                            // 5. Kubectl 권한 설정 (없으면 connection refused 뜸)
+                            echo "Kubeconfig 설정 중..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'mkdir -p /home/ubuntu/.kube'"
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo cp -i /etc/kubernetes/admin.conf /home/ubuntu/.kube/config'"
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo chown ubuntu:ubuntu /home/ubuntu/.kube/config'"
+
+                            // 6. Calico 설치
+                            echo "Calico 네트워크 플러그인 설치 중..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.0/manifests/calico.yaml'"
+
+
+                            echo "Master Node 스케줄링 허용(Taint 제거) 중..."
+                            // control-plane 태그 제거
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true'"
+                            // 잠시 대기 (Node >  Ready)
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sleep 20'"
+
+                            // 7. DB 볼륨 폴더 생성
                             echo "DB 볼륨 디렉토리 생성..."
                             sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo mkdir -p /root/test_db && sudo chmod 777 /root/test_db'"
 
-                            // 4. MariaDB 배포
-                            echo "MariaDB 배포 중..."
+                            // 8. 서비스 배포
+                            echo "MariaDB & App 배포 중..."
                             sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl apply -f /home/ubuntu/mariadb-deploy.yml'"
-                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sleep 20'"
-                            
-                            // 5. App 배포
-                            echo "Spring App 배포 중..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sleep 30'"
                             sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl apply -f /home/ubuntu/app-deploy.yml'"
                         }
                     } catch (Exception e) {
-                        echo "⚠️ 배포 중 에러 발생: " + e.getMessage()
+                        echo "error: " + e.getMessage()
                         currentBuild.result = 'FAILURE'
+                        throw e
                     }
                 }
             }
         }
-
-        stage('9. 최종 결과 확인') {
+stage('9. 최종 결과 확인') {
             steps {
                 script {
-                    def MASTER_IP = readFile('master_ip.txt').trim()
+                  
+                    def MASTER_IP
+
+                    dir('openstack') {
+                        MASTER_IP = sh(returnStdout: true, script: 'terraform output -raw master_ip').trim()
+                    }
+                    
                     sshagent(credentials: ['ssh_key_openstack']) {
-                        echo "=== 배포 상태 확인 ==="
+                        echo "Taint 제거"
+                        sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true'"
+                        
+                        echo "최종 배포"
                         sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl get svc,pods -o wide'"
+                        
+                        def NODE_PORT = sh(returnStdout: true, script: "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} \"kubectl get svc spring-app-service -o jsonpath='{.spec.ports[0].nodePort}'\"").trim()
+                        echo "address: http://${MASTER_IP}:${NODE_PORT}"
                     }
                 }
             }
         }
-
         stage('10. 리소스 정리 (Terraform Destroy)') {
             steps {
-                input message: '테스트 끝! 삭제할까요?', ok: '삭제 진행시켜!'
+                input message: 'delete?', ok: 'delete.'
                 dir('openstack') {
                     sh 'terraform destroy -auto-approve'
                 }
@@ -125,3 +166,4 @@ pipeline {
         }
     }
 }
+

@@ -15,7 +15,6 @@ variable "image_name" {
 variable "flavor_name" {
   description = "인스턴스 사양 (Flavor)"
   type        = string
-  # 확인하신 m1.medium을 정확히 입력합니다.
   default     = "m1.medium" 
 }
 
