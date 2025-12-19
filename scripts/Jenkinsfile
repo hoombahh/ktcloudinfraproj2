@@ -1,53 +1,74 @@
-// ktcloudinfraproj2/Jenkinsfile
 pipeline {
-    agent { label 'devops-agent-hybrid' }
+    agent any
+
     environment {
-        AWS_REGION = 'ap-northeast-2' 
-        TERRAFORM_DIR_OS = 'openstack'
-        TERRAFORM_DIR_AWS = 'aws'
-        DR_TRIGGER = env.DR_TRIGGER ?: 'false' // Job 매개변수로 주입 (기본값: false)
+        // 오픈스택 환경변수
+        OS_AUTH_URL             = "http://10.242.0.50:5000/v3"
+        OS_PROJECT_ID           = "aca5aa59b7264b2db407f58afac8667e"
+        OS_PROJECT_NAME         = "curry"
+        OS_USER_DOMAIN_NAME     = "Default"
+        OS_PROJECT_DOMAIN_ID    = "default"
+        OS_REGION_NAME          = "ap-northeast-2"
+        OS_INTERFACE            = "public"
+        OS_IDENTITY_API_VERSION = "3"
+        
+        // Terraform 자동화 옵션
+        TF_IN_AUTOMATION        = 'true'
     }
 
     stages {
-        stage('IaC Validation & Plan') {
-            parallel {
-                stage('OpenStack Check') {
-                    // OpenStack Provider 인증 설정 로직이 들어갈 영역
-                    steps {
-                        dir("${TERRAFORM_DIR_OS}") {
-                            sh "terraform init -backend=true"
-                            sh "terraform validate"
-                            // sh "terraform plan ..."
-                        }
-                    }
-                }
-                stage('AWS Check') {
-                    // AWS Credential 설정 로직이 들어갈 영역
-                    steps {
-                        dir("${TERRAFORM_DIR_AWS}") {
-                            sh "terraform init -backend=true"
-                            sh "terraform workspace select pilot-light || terraform workspace new pilot-light"
-                            sh "terraform validate"
-                            // sh "terraform plan -var='is_dr_mode=false' ..."
-                        }
+        stage('1. Git Clone') {
+            steps {
+                // 준하 님 깃허브 주소
+                git branch: 'main', url: 'https://github.com/hoombahh/ktcloudinfraproj2.git'
+            }
+        }
+        
+        stage('2. 인증 파일 준비') {
+            steps {
+                // 젠킨스 서버에 있는 clouds.yaml 복사
+                sh 'cp /var/lib/jenkins/clouds.yaml ./openstack/'
+            }
+        }
+
+        stage('3. 인프라 구축 (Terraform)') {
+            steps {
+                dir('openstack') {
+                    sh 'terraform init'
+                    
+                    // 오픈스택 비밀번호 주입 및 Apply
+                    withCredentials([usernamePassword(credentialsId: 'os_auth_creds', passwordVariable: 'OS_PASSWORD', usernameVariable: 'OS_USERNAME')]) {
+                        sh 'terraform apply -auto-approve'
+                        
+                        // ★ 중요: 만들어진 서버 IP를 파일로 저장
+                        sh 'terraform output -raw master_ip > ../master_ip.txt'
+                        sh 'terraform output -raw worker_ip > ../worker_ip.txt'
                     }
                 }
             }
         }
-        
-        stage('Web Deployment Pipeline Placeholder') {
-            // 웹 서비스 빌드 및 배포 Job이 들어갈 영역
-            steps { echo "Web Service CI/CD: Ready for Integration" }
+
+        stage('4. 서버 접속 대기 (Wait for SSH)') {
+            steps {
+                script {
+                    def MASTER_IP = readFile('master_ip.txt').trim()
+                    echo "Master IP: ${MASTER_IP} - 부팅 대기 중..."
+                    sleep 30 
+                }
+            }
         }
 
-        stage('DR Master Failover Trigger') {
-            // DR_TRIGGER 매개변수가 true일 때만 실행
-            when { expression { env.DR_TRIGGER == 'true' } }
+        stage('5. 쿠버네티스 설치 (Install K8s)') {
             steps {
-                timeout(time: 30, unit: 'MINUTES') { 
-                    input message: 'DR 전환을 최종 승인합니다.', ok: 'Failover 실행'
-                    // DR 마스터 스크립트 호출
-                    sh "python3 cicd/dr_master_script.py"
+                script {
+                    def MASTER_IP = readFile('master_ip.txt').trim()
+                    
+                    // ssh_key_openstack ID로 등록한 키 사용
+                    sshagent(credentials: ['ssh_key_openstack']) {
+                        // StrictHostKeyChecking=no : 최초 접속 시 물어보는 것 생략
+                        // scripts 폴더의 설치 스크립트를 원격 서버에서 실행
+                        sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'bash -s' < scripts/install_k8s.sh"
+                    }
                 }
             }
         }
