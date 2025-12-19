@@ -19,14 +19,13 @@ pipeline {
                 git branch: 'main', url: 'https://github.com/hoombahh/ktcloudinfraproj2.git'
             }
         }
-// --- [1단계: 인프라 구축 (Terraform)] ---
+        
+        // --- [1단계: 인프라 구축 (Terraform)] ---
 
         stage('2. 인증 파일 준비') {
             steps {
                 script {
-                    // 젠킨스 홈에 미리 넣어둔 clouds.yaml을 작업 폴더로 복사
                     sh 'cp /var/lib/jenkins/clouds.yaml ./openstack/'
-                    // 잘 들어갔는지 확인
                     sh 'ls -l ./openstack/clouds.yaml'
                 }
             }
@@ -43,7 +42,6 @@ pipeline {
         stage('4. Terraform Plan') {
             steps {
                 dir('openstack') {
-                    // 변경 사항 보여주기
                     sh 'terraform plan'
                 }
             }
@@ -59,10 +57,10 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'os_auth_creds', passwordVariable: 'OS_PASSWORD', usernameVariable: 'OS_USERNAME')]) {
                     dir('openstack') {
-                        // 진짜 생성
+                        // 비밀번호 환경변수 처리 
                         sh 'export OS_PASSWORD=\$OS_PASSWORD && terraform apply -auto-approve'
                         
-                        // 나중을 위해 만들어진 IP를 파일로 저장
+                        // IP 파일로 저장
                         sh 'terraform output -raw master_ip > ../master_ip.txt'
                     }
                 }
@@ -78,20 +76,20 @@ pipeline {
             }
         }
         
-// --- [2단계: 서비스 배포 (Kubernetes)] ---
+        // --- [2단계: 서비스 배포] ---
 
         stage('8. 쿠버네티스 설치 (Install K8s)') {
             steps {
                 script {
                     try {
                         def MASTER_IP = readFile('master_ip.txt').trim()
+                        
                         sshagent(credentials: ['ssh_key_openstack']) {
-                            // 설치 스크립트 전송 및 실행
-                            sh "scp -o StrictHostKeyChecking=no scripts/install_k8s.sh ubuntu@\${MASTER_IP}:/home/ubuntu/"
-                            sh "ssh -o StrictHostKeyChecking=no ubuntu@\${MASTER_IP} 'bash /home/ubuntu/install_k8s.sh'"
+                            sh "scp -o StrictHostKeyChecking=no scripts/install_k8s.sh ubuntu@${MASTER_IP}:/home/ubuntu/"
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'bash /home/ubuntu/install_k8s.sh'"
                         }
                     } catch (Exception e) {
-                        echo "에러"
+                        echo "에러 발생: " + e.getMessage()
                     }
                 }
             }
