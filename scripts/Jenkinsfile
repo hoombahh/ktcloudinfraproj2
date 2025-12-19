@@ -85,14 +85,67 @@ pipeline {
                         def MASTER_IP = readFile('master_ip.txt').trim()
                         
                         sshagent(credentials: ['ssh_key_openstack']) {
+                            // 1. 설치 스크립트 및 배포 YAML 파일 전송
                             sh "scp -o StrictHostKeyChecking=no scripts/install_k8s.sh ubuntu@${MASTER_IP}:/home/ubuntu/"
+                            sh "scp -o StrictHostKeyChecking=no cicd/mariadb-deploy.yml ubuntu@${MASTER_IP}:/home/ubuntu/"
+                            sh "scp -o StrictHostKeyChecking=no cicd/app-deploy.yml ubuntu@${MASTER_IP}:/home/ubuntu/"
+
+                            // 2. K8s 설치 실행 (기존 로직)
+                            echo "Kubernetes 설치 중..."
                             sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'bash /home/ubuntu/install_k8s.sh'"
+                            
+                            // 3. [추가됨] 개발자 요청사항: 호스트 볼륨 디렉토리 생성
+                            // /root 경로는 root 권한 필요 (sudo 사용)
+                            echo "DB 볼륨 디렉토리 생성 (/root/test_db)..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sudo mkdir -p /root/test_db && sudo chmod 777 /root/test_db'"
+
+                            // 4. [추가됨] MariaDB 배포 (순서 중요!)
+                            echo "MariaDB 배포 중..."
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl apply -f /home/ubuntu/mariadb-deploy.yml'"
+                            
+                            // 5. DB 안정화 대기 (20초)
+                            sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'sleep 20'"
+                            
+                            // 6. [추가됨] Spring Boot App 배포
+                            echo "Spring App 배포 중..."
+			    sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl apply -f /home/ubuntu/app-deploy.yml'"
                         }
                     } catch (Exception e) {
                         echo "에러 발생: " + e.getMessage()
+                        currentBuild.result = 'FAILURE'
                     }
                 }
             }
         }
+
+	stage('9. 최종 결과 확인') {
+            steps {
+                script {
+                    def MASTER_IP = readFile('master_ip.txt').trim()
+                    sshagent(credentials: ['ssh_key_openstack']) {
+                        echo "배포 상태 확인"
+                        sh "ssh -o StrictHostKeyChecking=no ubuntu@${MASTER_IP} 'kubectl get svc,pods,pv,pvc -o wide'"
+                    }
+                }
+            }
+
+
+
+	stage('10. 리소스 정리 (Terraform Destroy)') {
+            steps {
+                // 기본적으로는 그냥 넘어가고, 삭제하고 싶을 때만 '삭제' 버튼 누르기
+                input message: '테스트 끝! 생성한 VM들을 전부 삭제하시겠습니까?', ok: '삭제 진행시켜!'
+                
+                withCredentials([usernamePassword(credentialsId: 'os_auth_creds', passwordVariable: 'OS_PASSWORD', usernameVariable: 'OS_USERNAME')]) {
+                    dir('openstack') {
+                        echo "모든 리소스를 파괴합니다..."
+                        sh 'export OS_PASSWORD=$OS_PASSWORD && terraform destroy -auto-approve'
+                    }
+                }
+            }
+        }
+
+
+
     }
 }
