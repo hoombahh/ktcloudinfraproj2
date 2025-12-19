@@ -39,6 +39,7 @@ kind: PersistentVolume
 metadata:
   name: mariadb-pv
 spec:
+  storageClassName: manual  #
   capacity:
     storage: 2Gi
   accessModes:
@@ -51,8 +52,9 @@ kind: PersistentVolumeClaim
 metadata:
   name: mariadb-pvc
 spec:
+  storageClassName: manual #
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce #
   resources:
     requests:
       storage: 2Gi
