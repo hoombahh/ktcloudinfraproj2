@@ -60,3 +60,15 @@ resource "openstack_compute_floatingip_associate_v2" "fip_associate" {
   floating_ip = openstack_networking_floatingip_v2.fip[count.index].address
   instance_id = openstack_compute_instance_v2.active_web[count.index].id
 }
+
+# NodePort (30000-32767) 개방 규칙
+resource "openstack_networking_secgroup_rule_v2" "k8s_nodeport" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 30000
+  port_range_max    = 32767
+  remote_ip_prefix  = "0.0.0.0/0"
+  
+  security_group_id = data.openstack_networking_secgroup_v2.active_sg.id
+}
