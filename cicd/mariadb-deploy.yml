@@ -43,7 +43,7 @@ spec:
   capacity:
     storage: 2Gi
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   hostPath:
     path: /root/test_db
 ---
@@ -54,7 +54,7 @@ metadata:
 spec:
   storageClassName: manual #
   accessModes:
-    - ReadWriteOnce #
+    - ReadWriteMany #
   resources:
     requests:
       storage: 2Gi
