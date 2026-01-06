@@ -1,6 +1,12 @@
 pipeline {
   agent any
 
+  parameters {
+    string(name: 'UPSTREAM_JOB_NAME', 
+           defaultValue: 'dbrep', 
+           description: 'OpenStack Master')
+  }
+
   environment {
     // 1. RDS 접속 정보 (받아온 정보)
     RDS_HOST = "curry-db.cnq2ue4q4862.ap-northeast-2.rds.amazonaws.com"
@@ -10,7 +16,7 @@ pipeline {
 
     // 2. Replication 계정 (OpenStack Master에 접속할 계정)
     REPL_USER = "repl"
-    REPL_PW   = credentials('mariadb-repl-pw') // 기존에 등록해둔 것
+    REPL_PW   = credentials('mariadb-repl-pw')
 
     DB_NAME   = "immigration"
     OS_CLOUD  = "openstack"
@@ -18,25 +24,34 @@ pipeline {
   }
 
   stages {
-    stage('1. Git Checkout') {
+    stage('1. Get master ip') {
         steps {
-            git branch: 'main', url: 'https://github.com/hoombahh/ktcloudinfraproj2.git'
+        script {
+           try {
+               copyArtifacts(projectName: "${params.UPSTREAM_JOB_NAME}", 
+                             filter: 'master_ip.txt', 
+                             selector: lastSuccessful())
+               
+               env.MASTER_IP = readFile('master_ip.txt').trim()
+               echo " 자동으로 찾은 Master IP: ${env.MASTER_IP}"
+           } catch (Exception e) {
+               error " IP 파일을 못 가져왔습니다. 작업 이름('${params.UPSTREAM_JOB_NAME}')이 정확한지, 해당 작업이 성공했는지 확인"
+           }
         }
+      }
     }
 
-    stage('2. Get Master IP & Fetch Dump') {
+    stage('2. Fetch Dump') {
       steps {
         script {
-           // 2-1. Terraform에서 Master IP 가져오기
-           dir('openstack') {
-             env.MASTER_IP = sh(returnStdout: true, script: "terraform output -raw master_ip").trim()
-           }
-           echo " OpenStack Master IP: ${env.MASTER_IP}"
-
-           // 2-2. Master에서 최신 덤프 파일 가져오기 (SCP)
+           echo " OpenStack Master(${env.MASTER_IP}) 접속 및 덤프 가져오기..."
+           
            sshagent(credentials: [SSH_KEY_ID]) {
+               sh "rm -f dump.sql"
+               // IP가 자동이니 바로 SCP 가능
                sh "scp -o StrictHostKeyChecking=no ubuntu@${MASTER_IP}:/tmp/dump.sql ./dump.sql"
            }
+           sh "ls -lh dump.sql"
         }
       }
     }
