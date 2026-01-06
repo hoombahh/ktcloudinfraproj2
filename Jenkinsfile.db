@@ -74,14 +74,15 @@ pipeline {
         echo "📍 Binlog Pos : ${MASTER_LOG_POS}"
       }
     }
-
+    
     stage('4. Restore Dump to RDS (Slave)') {
       steps {
-        echo "📡 RDS(${RDS_HOST})로 데이터 부어넣는 중..."
-        // mysql 클라이언트가 설치되어 있어야 함 (없으면 설치: apt install mariadb-client -y)
+        echo " RDS(${RDS_HOST})로 데이터 부어넣는 중..."
+        //  export MYSQL_PWD=\$RDS_PW 사용
         sh """
-        mysql -h ${RDS_HOST} -P ${RDS_PORT} \
-          -u${RDS_USER} -p'${RDS_PW}' < dump.sql
+        export MYSQL_PWD=\$RDS_PW
+        
+        mysql -h ${RDS_HOST} -P ${RDS_PORT} -u ${RDS_USER} < dump.sql
         """
       }
     }
@@ -90,14 +91,13 @@ pipeline {
       steps {
         echo " Replication 연결 설정 중..."
         sh """
-        mysql -h ${RDS_HOST} -P ${RDS_PORT} \
-          -u${RDS_USER} -p${RDS_PW} << SQL || true
-
-        -- 기존 설정 초기화 (에러 무시)
+        export MYSQL_PWD=\$RDS_PW
+        
+        mysql -h ${RDS_HOST} -P ${RDS_PORT} -u ${RDS_USER} << SQL || true
+        
         STOP SLAVE;
         RESET SLAVE;
 
-        -- Master 정보 입력
         CHANGE MASTER TO
           MASTER_HOST='${MASTER_IP}',
           MASTER_USER='${REPL_USER}',
@@ -105,19 +105,19 @@ pipeline {
           MASTER_LOG_FILE='${MASTER_LOG_FILE}',
           MASTER_LOG_POS=${MASTER_LOG_POS};
 
-        -- 복제 시작
         START SLAVE;
         SQL
         """
       }
     }
-
+    
     stage('6. Check Slave Status') {
       steps {
         echo " 상태 확인"
         sh """
-        mysql -h ${RDS_HOST} -P ${RDS_PORT} \
-          -u${RDS_USER} -p${RDS_PW} -e "SHOW SLAVE STATUS\\G"
+        export MYSQL_PWD=\$RDS_PW
+        
+        mysql -h ${RDS_HOST} -P ${RDS_PORT} -u ${RDS_USER} -e "SHOW SLAVE STATUS\\G"
         """
       }
     }
