@@ -1,0 +1,110 @@
+pipeline {
+  agent any
+
+  environment {
+    // 1. RDS 접속 정보 (받아온 정보)
+    RDS_HOST = "curry-db.cnq2ue4q4862.ap-northeast-2.rds.amazonaws.com"
+    RDS_PORT = "3306"
+    RDS_USER = "admin"
+    RDS_PW   = credentials('rds-admin-pw') // 아까 등록한 ID
+
+    // 2. Replication 계정 (OpenStack Master에 접속할 계정)
+    REPL_USER = "repl"
+    REPL_PW   = credentials('mariadb-repl-pw') // 기존에 등록해둔 것
+
+    DB_NAME   = "immigration"
+    OS_CLOUD  = "openstack"
+    SSH_KEY_ID = 'ssh_key_openstack'
+  }
+
+  stages {
+    stage('1. Git Checkout') {
+        steps {
+            git branch: 'main', url: 'https://github.com/hoombahh/ktcloudinfraproj2.git'
+        }
+    }
+
+    stage('2. Get Master IP & Fetch Dump') {
+      steps {
+        script {
+           // 2-1. Terraform에서 Master IP 가져오기
+           dir('openstack') {
+             env.MASTER_IP = sh(returnStdout: true, script: "terraform output -raw master_ip").trim()
+           }
+           echo " OpenStack Master IP: ${env.MASTER_IP}"
+
+           // 2-2. Master에서 최신 덤프 파일 가져오기 (SCP)
+           sshagent(credentials: [SSH_KEY_ID]) {
+               sh "scp -o StrictHostKeyChecking=no ubuntu@${MASTER_IP}:/tmp/dump.sql ./dump.sql"
+           }
+        }
+      }
+    }
+
+    stage('3. Extract Binlog Info') {
+      steps {
+        script {
+          // 덤프 파일에서 로그 위치(좌표) 추출
+          env.MASTER_LOG_FILE = sh(
+            script: "grep 'MASTER_LOG_FILE' dump.sql | sed -n \"s/.*MASTER_LOG_FILE='\\([^']*\\)'.*/\\1/p\"",
+            returnStdout: true
+          ).trim()
+
+          env.MASTER_LOG_POS = sh(
+            script: "grep 'MASTER_LOG_POS' dump.sql | sed -n \"s/.*MASTER_LOG_POS=\\([0-9]*\\).*/\\1/p\"",
+            returnStdout: true
+          ).trim()
+        }
+        echo "📍 Binlog File: ${MASTER_LOG_FILE}"
+        echo "📍 Binlog Pos : ${MASTER_LOG_POS}"
+      }
+    }
+
+    stage('4. Restore Dump to RDS (Slave)') {
+      steps {
+        echo "📡 RDS(${RDS_HOST})로 데이터 부어넣는 중..."
+        // mysql 클라이언트가 설치되어 있어야 함 (없으면 설치: apt install mariadb-client -y)
+        sh """
+        mysql -h ${RDS_HOST} -P ${RDS_PORT} \
+          -u${RDS_USER} -p${RDS_PW} < dump.sql
+        """
+      }
+    }
+
+    stage('5. Configure RDS Replication') {
+      steps {
+        echo " Replication 연결 설정 중..."
+        sh """
+        mysql -h ${RDS_HOST} -P ${RDS_PORT} \
+          -u${RDS_USER} -p${RDS_PW} << SQL || true
+
+        -- 기존 설정 초기화 (에러 무시)
+        STOP SLAVE;
+        RESET SLAVE;
+
+        -- Master 정보 입력
+        CHANGE MASTER TO
+          MASTER_HOST='${MASTER_IP}',
+          MASTER_USER='${REPL_USER}',
+          MASTER_PASSWORD='${REPL_PW}',
+          MASTER_LOG_FILE='${MASTER_LOG_FILE}',
+          MASTER_LOG_POS=${MASTER_LOG_POS};
+
+        -- 복제 시작
+        START SLAVE;
+        SQL
+        """
+      }
+    }
+
+    stage('6. Check Slave Status') {
+      steps {
+        echo " 상태 확인"
+        sh """
+        mysql -h ${RDS_HOST} -P ${RDS_PORT} \
+          -u${RDS_USER} -p${RDS_PW} -e "SHOW SLAVE STATUS\\G"
+        """
+      }
+    }
+  }
+}
