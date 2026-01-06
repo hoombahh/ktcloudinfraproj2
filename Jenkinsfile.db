@@ -115,7 +115,7 @@ pipeline {
       steps {
         echo " 상태 확인"
         sh """
-        export MYSQL_PWD=\$RDS_PW
+        export MYSQL_PWD='${RDS_PW}'
         
         mysql -h ${RDS_HOST} -P ${RDS_PORT} -u ${RDS_USER} -e "SHOW SLAVE STATUS\\G"
         """
