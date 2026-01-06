@@ -30,7 +30,7 @@ pipeline {
            try {
                copyArtifacts(projectName: "${params.UPSTREAM_JOB_NAME}", 
                              filter: 'master_ip.txt', 
-                             selector: lastSuccessful())
+                             selector: [$class: 'StatusBuildSelector', stable: false])
                
                env.MASTER_IP = readFile('master_ip.txt').trim()
                echo " 자동으로 찾은 Master IP: ${env.MASTER_IP}"
