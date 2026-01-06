@@ -7,7 +7,11 @@ pipeline {
         ECR_REGISTRY = "708467047243.dkr.ecr.ap-northeast-2.amazonaws.com"
         ECR_REPO = "curry-app"
         EKS_CLUSTER = "curry-cluster"
-        
+ 	
+	RDS_HOST = "curry-db.cnq2ue4q4862.ap-northeast-2.rds.amazonaws.com"
+        RDS_PORT = "3306"
+        RDS_PW   = credentials('rds-admin-pw')
+       
         // 이미지 태그 (빌드 번호 사용)
         IMAGE_TAG = "${env.BUILD_NUMBER}"
         FULL_IMAGE_NAME = "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
@@ -54,11 +58,11 @@ pipeline {
                     // Kubeconfig 업데이트 (접속 권한 갱신)
                     sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER}"
                     
-                    // 배포 파일(yml) 적용
-                    // 주의: yml 파일의 image 부분을 방금 빌드한 태그로 교체해서 배포
                     dir('aws') {
                         sh "sed -i 's|image: .*|image: ${FULL_IMAGE_NAME}|' app-deploy.yml"
-                        sh "kubectl apply -f app-deploy.yml"
+                        sh "sed -i 's|value: \"mariadb-aws-service\"|value: \"${RDS_HOST}\"|' app-deploy.yml"
+                        sh "sed -i 's#value: \"test1234\"#value: \"${RDS_PW}\"#' app-deploy.yml"
+			sh "kubectl apply -f app-deploy.yml"
                     }
                 }
             }
