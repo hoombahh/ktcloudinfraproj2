@@ -30,24 +30,27 @@ pipeline {
             }
         }
 
-        // ❌ 빌드 단계 삭제! 바로 배포로 넘어갑니다.
-
-        stage('3. Deploy to EKS') {
+	stage('3. Deploy to EKS') {
             steps {
                 script {
-                    // 1. Kubeconfig 갱신
-                    sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}"
-
-                    // 2. YAML 수정 및 배포
-                    dir('aws') {
-                        // [중요] DB 주소를 AWS RDS로 교체
-                        sh "sed -i 's|value: \"mariadb\"|value: \"${RDS_ENDPOINT}\"|' app-deploy.yml"
+                    withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         
-                        // [중요] DB 비밀번호 교체
-                        sh "sed -i 's#value: \"test1234\"#value: \"${RDS_PW}\"#' app-deploy.yml"
-
-                        // 배포!
-                        sh "kubectl apply -f app-deploy.yml"
+                        // 환경 변수 설정 (리전은 고정)
+                        withEnv(["AWS_DEFAULT_REGION=${AWS_REGION}"]) {
+                            echo " AWS 인증 정보 주입 완료 (안전 모드)"
+                            
+                            // 1. Kubeconfig 갱신
+                            sh "aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME}"
+    
+                            // 2. YAML 수정 및 배포
+                            dir('aws') {
+                                sh "sed -i 's|value: \"mariadb\"|value: \"${RDS_ENDPOINT}\"|' app-deploy.yml"
+                                sh "sed -i 's#value: \"test1234\"#value: \"${RDS_PW}\"#' app-deploy.yml"
+                                
+                                echo "🚀 배포 시작!"
+                                sh "kubectl apply -f app-deploy.yml"
+                            }
+                        }
                     }
                 }
             }
