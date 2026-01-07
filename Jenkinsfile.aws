@@ -1,80 +1,32 @@
 pipeline {
     agent any
-
     environment {
         AWS_REGION = "ap-northeast-2"
-        EKS_CLUSTER_NAME = "curry-cluster"
-        RDS_PW = credentials('rds-admin-pw')
-        RDS_ENDPOINT = "" 
     }
-
     stages {
         stage('1. Git Checkout') {
             steps {
-                // 인프라 코드만 있으면 됨
                 git branch: 'main', url: 'https://github.com/hoombahh/ktcloudinfraproj2.git'
             }
         }
 
-        stage('2. Terraform Apply (인프라 구축)') {
+        stage('2. Terraform Apply (DB Only)') {
             steps {
-		withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                     dir('aws') {
-                        // 초기화 및 청소
+                        // 기존 찌꺼기 청소
                         sh 'rm -rf .terraform .terraform.lock.hcl'
                         sh 'terraform init'
                         
-                        // 적용 (키가 있으니 이제 성공함)
+                        // DB 생성
                         sh 'terraform apply -auto-approve'
                         
-                        // RDS 주소 가져오기
+                        // 결과 출력
                         script {
                             RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
-                            echo "✅ RDS 주소 확보: ${RDS_ENDPOINT}"
+                            echo "✅ DB 생성 완료! 접속 주소: ${RDS_ENDPOINT}"
                         }
                     }
-                }
-            }
-        }
-	stage('3. Deploy to EKS') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                        
-                        // 환경 변수 설정 (리전은 고정)
-                        withEnv(["AWS_DEFAULT_REGION=${AWS_REGION}"]) {
-                            echo " AWS 인증 정보 주입 완료 (안전 모드)"
-                            
-                            // 1. Kubeconfig 갱신
-                            sh "aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME}"
-    
-                            // 2. YAML 수정 및 배포
-                            dir('aws') {
-                                sh "sed -i 's|value: \"mariadb\"|value: \"${RDS_ENDPOINT}\"|' app-deploy.yml"
-                                sh "sed -i 's#value: \"test1234\"#value: \"${RDS_PW}\"#' app-deploy.yml"
-                                
-                                echo "🚀 배포 시작!"
-                                sh "kubectl apply -f app-deploy.yml"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('4. 결과 확인') {
-            steps {
-                sleep 10
-                sh "kubectl get pods -o wide"
-                sh "kubectl get svc spring-app-service-aws"
-            }
-        }
-        
-        stage('5. 리소스 정리') {
-            steps {
-                input message: '테스트 끝! 삭제할까요?', ok: '삭제'
-                dir('aws') {
-                    sh 'terraform destroy -auto-approve'
                 }
             }
         }
