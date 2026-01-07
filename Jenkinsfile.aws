@@ -19,8 +19,14 @@ pipeline {
                     dir('aws') {
                         sh 'rm -rf .terraform .terraform.lock.hcl'
                         sh 'terraform init'
-                        sh "terraform import 'module.eks.aws_eks_cluster.this[0]' curry-cluster || true"
-                        sh 'terraform apply -auto-approve' 
+                        sh '''
+                        cat <<EOF > import_fix.tf
+import {
+  to = module.eks.aws_eks_cluster.this[0]
+  id = "curry-cluster"
+}
+EOF
+                        '''
                         
                         script {
                             RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
