@@ -18,12 +18,13 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                     dir('aws') {
                         sh 'rm -rf .terraform .terraform.lock.hcl' // 깨끗하게 시작
+			sh 'aws logs delete-log-group --log-group-name /aws/eks/curry-cluster/cluster --region ap-northeast-2 || true'
                         sh 'terraform init'
                         sh 'terraform apply -auto-approve' // 15분 정도 걸림
                         
                         script {
                             RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
-                            echo "✅ RDS 주소: ${RDS_ENDPOINT}"
+                            echo " RDS 주소: ${RDS_ENDPOINT}"
                         }
                     }
                 }
@@ -44,7 +45,7 @@ pipeline {
                             sh "sed -i 's|value: \"mariadb\"|value: \"${RDS_ENDPOINT}\"|' app-deploy.yml"
                             sh "sed -i 's#value: \"test1234\"#value: \"${RDS_PW}\"#' app-deploy.yml"
 
-                            echo "🚀 앱 배포 시작!"
+                            echo " 앱 배포 시작!"
                             sh "kubectl apply -f app-deploy.yml"
                         }
                     }
