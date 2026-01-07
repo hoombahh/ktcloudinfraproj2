@@ -17,10 +17,10 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                     dir('aws') {
-                        sh 'rm -rf .terraform .terraform.lock.hcl' // 깨끗하게 시작
+                        sh 'rm -rf .terraform .terraform.lock.hcl'
                         sh 'terraform init'
                         sh "terraform import 'module.eks.aws_eks_cluster.this[0]' curry-cluster || true"
-                        sh 'terraform apply -auto-approve' // 15분 정도 걸림
+                        sh 'terraform apply -auto-approve' 
                         
                         script {
                             RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
