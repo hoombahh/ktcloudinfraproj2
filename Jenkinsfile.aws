@@ -2,133 +2,68 @@ pipeline {
     agent any
 
     environment {
-        // [AWS 공통 설정]
         AWS_REGION = "ap-northeast-2"
-        
-        // [ECR & EKS 정보] - (Terraform 변수와 맞춰주세요)
-        ECR_REGISTRY = "708467047243.dkr.ecr.ap-northeast-2.amazonaws.com"
-        ECR_REPO = "curry-app"
-        EKS_CLUSTER_NAME = "curry-cluster" // Terraform에서 생성할 클러스터 이름
-
-        // [이미지 태그]
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
-        FULL_IMAGE_NAME = "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-        LATEST_IMAGE_NAME = "${ECR_REGISTRY}/${ECR_REPO}:latest"
-        
-        // [RDS 비밀번호] - 젠킨스 자격증명 ID
+        EKS_CLUSTER_NAME = "curry-cluster"
         RDS_PW = credentials('rds-admin-pw')
-        
-        // [변수 저장용] Terraform에서 나온 DB 주소를 담을 변수
-        RDS_ENDPOINT = ""
+        RDS_ENDPOINT = "" 
     }
 
     stages {
-        stage('1. Git Checkout (Infra)') {
+        stage('1. Git Checkout') {
             steps {
-                // 인프라 코드가 있는 현재 리포지토리 체크아웃
+                // 인프라 코드만 있으면 됨
                 git branch: 'main', url: 'https://github.com/hoombahh/ktcloudinfraproj2.git'
             }
         }
 
-        stage('2. Terraform Init & Plan (AWS Infra)') {
+        stage('2. Terraform Apply (인프라 구축)') {
             steps {
                 dir('aws') {
-                    // AWS 인증은 젠킨스 서버에 aws configure가 되어 있거나, IAM Role이 있다고 가정
                     sh 'terraform init'
-                    sh 'terraform plan'
-                }
-            }
-        }
-
-        stage('3. Terraform Apply (AWS Infra Create)') {
-            steps {
-                dir('aws') {
-                    echo " AWS 인프라(EKS, RDS, VPC) 생성 시작..."
                     sh 'terraform apply -auto-approve'
-                    
-                    // [중요] Terraform Output에서 RDS 주소 가져오기
-                    // aws/outputs.tf 파일에 output "rds_endpoint" { ... } 가 정의되어 있어야 합니다!
+                    // RDS 주소 확보
                     script {
                         RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
-                        echo " 생성된 RDS 주소: ${RDS_ENDPOINT}"
+                        echo " RDS 주소 확보: ${RDS_ENDPOINT}"
                     }
                 }
             }
         }
 
-        stage('4. Java App Build (Gradle)') {
-            steps {
-                // 앱 소스는 별도 리포지토리에서 가져옴 (아까 수정한 부분)
-                dir('app-build') {
-                    // 실제 앱 소스코드 주소로 변경 필요
-                    git branch: 'main', url: 'https://github.com/hoombahh/immigration-app.git' 
-                    sh 'chmod +x gradlew'
-                    sh './gradlew clean build -x test'
-                }
-            }
-        }
+        // ❌ 빌드 단계 삭제! 바로 배포로 넘어갑니다.
 
-        stage('5. Docker Build & Push to ECR') {
+        stage('3. Deploy to EKS') {
             steps {
                 script {
-                    dir('app-build') {
-                        // ECR 로그인
-                        sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
-                        
-                        // 빌드 및 푸시
-                        sh "docker build -t ${FULL_IMAGE_NAME} ."
-                        sh "docker tag ${FULL_IMAGE_NAME} ${LATEST_IMAGE_NAME}"
-                        sh "docker push ${FULL_IMAGE_NAME}"
-                        sh "docker push ${LATEST_IMAGE_NAME}"
-                    }
-                }
-            }
-        }
-
-        stage('6. Deploy to EKS') {
-            steps {
-                script {
-                    // 1. 젠킨스가 EKS에 접속할 수 있게 kubeconfig 업데이트
+                    // 1. Kubeconfig 갱신
                     sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME}"
 
-                    // 2. YAML 파일 수정 및 배포
+                    // 2. YAML 수정 및 배포
                     dir('aws') {
-                        // 이미지 주소 교체
-                        sh "sed -i 's|image: .*|image: ${FULL_IMAGE_NAME}|' app-deploy.yml"
+                        // [중요] DB 주소를 AWS RDS로 교체
+                        sh "sed -i 's|value: \"mariadb\"|value: \"${RDS_ENDPOINT}\"|' app-deploy.yml"
                         
-                        // DB 주소 교체 (Terraform에서 가져온 값)
-                        sh "sed -i 's|value: \"mariadb-aws-service\"|value: \"${RDS_ENDPOINT}\"|' app-deploy.yml"
-                        
-                        // DB 비밀번호 교체 (젠킨스 Credentials)
+                        // [중요] DB 비밀번호 교체
                         sh "sed -i 's#value: \"test1234\"#value: \"${RDS_PW}\"#' app-deploy.yml"
-                        
-                        // 배포 적용
+
+                        // 배포!
                         sh "kubectl apply -f app-deploy.yml"
                     }
                 }
             }
         }
 
-        stage('7. 배포 결과 확인') {
+        stage('4. 결과 확인') {
             steps {
-                // 잠시 대기 (Pod 뜰 때까지)
                 sleep 10
                 sh "kubectl get pods -o wide"
-                sh "kubectl get svc immigration-app-service-aws"
-                
-                script {
-                    // LoadBalancer 주소 출력
-                    def LB_URL = sh(returnStdout: true, script: "kubectl get svc immigration-app-service-aws -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'").trim()
-                    echo " 접속 주소: http://${LB_URL}"
-                }
+                sh "kubectl get svc spring-app-service-aws"
             }
         }
-
-        stage('8. 리소스 정리 (Terraform Destroy)') {
+        
+        stage('5. 리소스 정리') {
             steps {
-                // 오픈스택 파이프라인처럼 승인 버튼 추가
-                input message: '테스트 끝! AWS 리소스를 삭제할까요?', ok: '삭제 진행시켜!'
-                
+                input message: '테스트 끝! 삭제할까요?', ok: '삭제'
                 dir('aws') {
                     sh 'terraform destroy -auto-approve'
                 }

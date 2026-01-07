@@ -1,51 +1,44 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: immigration-app-aws
+  name: spring-app
   labels:
-    app: immigration-app
+    app: spring-app
 spec:
-  replicas: 1  # Warm Standby니까 1개만 유지 (비용 절감)
+  replicas: 2
   selector:
     matchLabels:
-      app: immigration-app
+      app: spring-app
   template:
     metadata:
       labels:
-        app: immigration-app
+        app: spring-app
     spec:
       containers:
-        - name: immigration-app
-          # 👇 형님이 찾은 그 ECR 주소입니다. (:latest 태그 사용)
-          image: 708467047243.dkr.ecr.ap-northeast-2.amazonaws.com/curry-app:latest
-          imagePullPolicy: Always
+        - name: spring-app
+          # 👇 형님이 가져오신 완성된 이미지!
+          image: gne0hy/curry:spring-7 
           ports:
             - containerPort: 8080
           env:
-            # ⚠️ 중요: 아직 AWS에 DB가 없으므로, 나중에 Slave DB 만들면 그 IP로 바꿔야 함
-            # 지금은 일단 비워두거나 더미로 둡니다.
+            # 👇 젠킨스가 여기를 AWS RDS 주소로 바꿔줄 겁니다
             - name: DB_HOST
-              value: "mariadb-aws-service" 
-            - name: DB_PORT
-              value: "3306"
-            - name: DB_NAME
-              value: "immigration"
+              value: "mariadb" 
             - name: DB_USER
               value: "root"
-            - name: DB_PW
-              value: "test1234" # (보안상 나중에 시크릿으로 빼는 게 좋음)
+            - name: DB_PASSWORD
+              value: "test1234" # 이것도 젠킨스가 바꿔줍니다
+            # (필요하다면 DB_PORT 등 추가)
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: immigration-app-service-aws
+  name: spring-app-service-aws # 이름 겹칠까봐 -aws 붙임
 spec:
-  # AWS에서는 LoadBalancer 쓰면 자동으로 외부 주소(CLB/NLB)를 만들어줍니다.
   type: LoadBalancer
   selector:
-    app: immigration-app
+    app: spring-app
   ports:
-    - protocol: TCP
-      port: 80
+    - port: 80
       targetPort: 8080
