@@ -11,19 +11,19 @@ provider "aws" {
   region = "ap-northeast-2"
 }
 
-# 1. 네트워크 (VPC) - DB가 살 집
+# 1. 네트워크 (VPC)
 module "vpc" {
   source = "terraform-aws-modules/vpc/aws"
   version = "5.1.2"
 
-  name = "curry-vpc-db-only"
+  name = "curry-vpc"
   cidr = "10.0.0.0/16"
 
   azs             = ["ap-northeast-2a", "ap-northeast-2c"]
   private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
   public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
 
-  # 👇 [핵심] 이게 없어서 아까 에러난 겁니다. DB 전용 방 추가!
+  # 👇 [중요] 아까 에러 잡았던 DB 전용 방 설정 유지!
   database_subnets = ["10.0.3.0/24", "10.0.4.0/24"]
   create_database_subnet_group = true
 
@@ -33,9 +33,9 @@ module "vpc" {
   enable_dns_support   = true
 }
 
-# 2. 보안 그룹 (누구나 접속 가능하게 - 테스트용)
+# 2. 보안 그룹 (RDS용)
 resource "aws_security_group" "rds_sg" {
-  name        = "rds-security-group-test"
+  name        = "rds-security-group"
   description = "Allow DB traffic"
   vpc_id      = module.vpc.vpc_id
 
@@ -54,7 +54,7 @@ resource "aws_security_group" "rds_sg" {
   }
 }
 
-# 3. 데이터베이스 (RDS MariaDB)
+# 3. 데이터베이스 (RDS)
 resource "aws_db_instance" "default" {
   allocated_storage    = 10
   db_name              = "mariadb"
@@ -65,8 +65,31 @@ resource "aws_db_instance" "default" {
   password             = "test1234"
   parameter_group_name = "default.mariadb10.11"
   skip_final_snapshot  = true
-  publicly_accessible  = true # 외부에서 접속 테스트 하려면 true
+  publicly_accessible  = true
   
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   db_subnet_group_name   = module.vpc.database_subnet_group_name
+}
+
+# 4. 쿠버네티스 (EKS) - 다시 추가!
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "19.21.0"
+
+  cluster_name    = "curry-cluster"
+  cluster_version = "1.27"
+
+  cluster_endpoint_public_access = true
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  eks_managed_node_groups = {
+    default = {
+      min_size     = 1
+      max_size     = 2
+      desired_size = 1
+      instance_types = ["t3.medium"]
+    }
+  }
 }
