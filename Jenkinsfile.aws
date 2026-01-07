@@ -19,8 +19,8 @@ pipeline {
                     dir('aws') {
                         sh 'rm -rf .terraform .terraform.lock.hcl' // 깨끗하게 시작
                         sh 'terraform init'
-			sh "terraform import 'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/curry-cluster/cluster || true"
-			sh "terraform import 'module.eks.aws_eks_cluster.this[0]' curry-cluster || true"
+			sh "terraform import 'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/curry-cluster/cluster"
+			sh "terraform import 'module.eks.aws_eks_cluster.this[0]' curry-cluster "
                         sh 'terraform apply -auto-approve' // 15분 정도 걸림
                         
                         script {
