@@ -19,6 +19,7 @@ pipeline {
         stage('2. Terraform Apply (인프라 구축)') {
             steps {
                 dir('aws') {
+                    sh 'rm -rf .terraform .terraform.lock.hcl'
                     sh 'terraform init'
                     sh 'terraform apply -auto-approve'
                     // RDS 주소 확보

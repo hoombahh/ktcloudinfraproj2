@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.0" # 우리는 5.x 버전을 씁니다
     }
   }
 }
@@ -11,9 +11,10 @@ provider "aws" {
   region = "ap-northeast-2"
 }
 
-# 1. 네트워크 (VPC) - 집터 닦기
+# 1. 네트워크 (VPC)
 module "vpc" {
   source = "terraform-aws-modules/vpc/aws"
+  version = "5.1.2"  # 👈 [중요] 버전을 5.x로 고정해서 충돌 방지!
 
   name = "curry-vpc"
   cidr = "10.0.0.0/16"
@@ -24,19 +25,23 @@ module "vpc" {
 
   enable_nat_gateway = true
   single_nat_gateway = true
+  
+  # DNS 호스트네임 활성화 (RDS 접속 잘 되게)
+  enable_dns_hostnames = true
+  enable_dns_support   = true
 }
 
-# 2. 보안 그룹 (Security Group) - 대문 단속
+# 2. 보안 그룹 (RDS용)
 resource "aws_security_group" "rds_sg" {
   name        = "rds-security-group"
-  description = "Allow all inbound traffic"
+  description = "Allow DB traffic"
   vpc_id      = module.vpc.vpc_id
 
   ingress {
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # 테스트용이라 다 열어둠 (실무에선 제한 필수)
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 
   egress {
@@ -47,16 +52,16 @@ resource "aws_security_group" "rds_sg" {
   }
 }
 
-# 3. 데이터베이스 (RDS MariaDB) - 창고 짓기
+# 3. 데이터베이스 (RDS)
 resource "aws_db_instance" "default" {
   allocated_storage    = 10
   db_name              = "mariadb"
   engine               = "mariadb"
-  engine_version       = "10.6"
+  engine_version       = "10.11" # 버전 살짝 올림 (안정성)
   instance_class       = "db.t3.micro"
   username             = "root"
-  password             = "test1234" # 초기 비밀번호
-  parameter_group_name = "default.mariadb10.6"
+  password             = "test1234"
+  parameter_group_name = "default.mariadb10.11"
   skip_final_snapshot  = true
   publicly_accessible  = true
   
@@ -64,12 +69,12 @@ resource "aws_db_instance" "default" {
   db_subnet_group_name   = module.vpc.database_subnet_group_name
 }
 
-# 4. 쿠버네티스 (EKS) - 공장 짓기
+# 4. 쿠버네티스 (EKS)
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.0"
+  version = "19.21.0" # 👈 이것도 버전 고정 (안정적)
 
-  cluster_name    = "curry-cluster" # Jenkinsfile 이름과 일치해야 함!
+  cluster_name    = "curry-cluster"
   cluster_version = "1.27"
 
   cluster_endpoint_public_access = true
@@ -82,7 +87,6 @@ module "eks" {
       min_size     = 1
       max_size     = 2
       desired_size = 1
-
       instance_types = ["t3.medium"]
     }
   }
