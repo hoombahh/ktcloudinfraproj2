@@ -18,19 +18,24 @@ pipeline {
 
         stage('2. Terraform Apply (인프라 구축)') {
             steps {
-                dir('aws') {
-                    sh 'rm -rf .terraform .terraform.lock.hcl'
-                    sh 'terraform init'
-                    sh 'terraform apply -auto-approve'
-                    // RDS 주소 확보
-                    script {
-                        RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
-                        echo " RDS 주소 확보: ${RDS_ENDPOINT}"
+		withCredentials([usernamePassword(credentialsId: 'aws-key', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    dir('aws') {
+                        // 초기화 및 청소
+                        sh 'rm -rf .terraform .terraform.lock.hcl'
+                        sh 'terraform init'
+                        
+                        // 적용 (키가 있으니 이제 성공함)
+                        sh 'terraform apply -auto-approve'
+                        
+                        // RDS 주소 가져오기
+                        script {
+                            RDS_ENDPOINT = sh(returnStdout: true, script: 'terraform output -raw rds_endpoint').trim()
+                            echo "✅ RDS 주소 확보: ${RDS_ENDPOINT}"
+                        }
                     }
                 }
             }
         }
-
 	stage('3. Deploy to EKS') {
             steps {
                 script {
